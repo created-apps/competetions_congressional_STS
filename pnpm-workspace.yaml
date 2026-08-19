@@ -1,2 +1,8 @@
+overrides:
+  hono: 4.12.25
+
+# Don't run msw's postinstall build script — it's a transitive dependency we
+# don't use at runtime. pnpm's frozen/CI install fails on any undecided build
+# script (ERR_PNPM_IGNORED_BUILDS), so this decision must be explicit.
 allowBuilds:
-  msw: set this to true or false
+  msw: false
