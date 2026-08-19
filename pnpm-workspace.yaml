@@ -6,3 +6,7 @@ overrides:
 # script (ERR_PNPM_IGNORED_BUILDS), so this decision must be explicit.
 allowBuilds:
   msw: false
+
+# Don't let `pnpm run build` trigger an implicit `pnpm install` (which would
+# re-check the release-age policy without the bypass flag and fail the build).
+verifyDepsBeforeRun: false
