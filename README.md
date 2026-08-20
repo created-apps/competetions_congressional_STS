@@ -79,6 +79,14 @@ pnpm start
 
 ## How it works
 
+- **Document uploads.** In a chat you can attach a **PDF or Word (`.docx`)**
+  document (up to 10 MB). It's uploaded to `app/api/documents/extract/route.ts`,
+  where the text is extracted server-side (`unpdf` for PDFs, `mammoth` for DOCX),
+  capped at 100k characters, and attached to that turn's context so the coach can
+  read and give feedback on it. The extracted text is sent to the model for the
+  message it's attached to; a short marker (`📎 Attached document: …`) is saved in
+  the transcript. Scanned/image-only PDFs have no extractable text and are
+  rejected with a friendly message.
 - **Email/password auth.** Users sign up or sign in at `/login`. Passwords are
   hashed with a salted [scrypt](https://en.wikipedia.org/wiki/Scrypt) digest
   (`lib/auth/password.ts`, Node's built-in `crypto` — no extra dependency) and
@@ -97,9 +105,9 @@ pnpm start
 ## Project structure
 
 ```
-app/            App Router pages (login, home, chat) and API routes (auth, chat)
+app/            App Router pages (login, home, chat) and API routes (auth, chat, documents)
 components/     UI components (auth form, chat, sidebar, shadcn/ui primitives)
-lib/            Supabase client, auth (password + session), data access, types
+lib/            Supabase client, auth (password + session), document extraction, data access, types
 scripts/        SQL: schema + seed data + auth tables
 public/         Icons and static assets
 ```

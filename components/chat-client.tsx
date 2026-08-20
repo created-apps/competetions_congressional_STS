@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react"
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport, type UIMessage } from "ai"
-import { Menu, SendHorizontal } from "lucide-react"
+import { FileText, Menu, Paperclip, SendHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
+import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { ChatSidebar, type ConversationListItem } from "@/components/chat-sidebar"
 import { MessageRow, TypingIndicator } from "@/components/message-list"
@@ -17,20 +18,30 @@ type Props = {
   initialMessages: UIMessage[]
 }
 
+type Attachment = { filename: string; text: string; truncated: boolean; chars: number }
+
+const ACCEPT = ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
 export function ChatClient({ conversationId, assistant, conversations, initialMessages }: Props) {
   const [input, setInput] = useState("")
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [attachment, setAttachment] = useState<Attachment | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [attachError, setAttachError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { messages, sendMessage, status, error } = useChat({
     id: conversationId,
     messages: initialMessages,
     transport: new DefaultChatTransport({
       api: "/api/chat",
-      prepareSendMessagesRequest: ({ messages }) => ({
+      // `body` carries per-message extras (the attachment) from sendMessage().
+      prepareSendMessagesRequest: ({ messages, body }) => ({
         body: {
           messages,
           conversationId,
+          ...body,
         },
       }),
     }),
@@ -44,11 +55,48 @@ export function ChatClient({ conversationId, assistant, conversations, initialMe
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
   }, [messages, busy])
 
+  async function onFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = "" // allow re-selecting the same file later
+    if (!file) return
+
+    setAttachError(null)
+    setUploading(true)
+    try {
+      const form = new FormData()
+      form.append("file", file)
+      const res = await fetch("/api/documents/extract", { method: "POST", body: form })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? "We couldn't read that document.")
+      setAttachment({
+        filename: data.filename,
+        text: data.text,
+        truncated: Boolean(data.truncated),
+        chars: data.chars ?? data.text.length,
+      })
+    } catch (err) {
+      setAttachment(null)
+      setAttachError(err instanceof Error ? err.message : "We couldn't read that document.")
+    } finally {
+      setUploading(false)
+    }
+  }
+
   function submit(text: string) {
     const trimmed = text.trim()
-    if (!trimmed || busy) return
-    sendMessage({ text: trimmed })
+    if (busy || uploading) return
+    if (!trimmed && !attachment) return
+
+    const messageText = trimmed || `Please take a look at my attached document (${attachment!.filename}).`
+    sendMessage(
+      { text: messageText },
+      attachment
+        ? { body: { attachment: { filename: attachment.filename, text: attachment.text, truncated: attachment.truncated } } }
+        : undefined,
+    )
     setInput("")
+    setAttachment(null)
+    setAttachError(null)
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -61,6 +109,7 @@ export function ChatClient({ conversationId, assistant, conversations, initialMe
 
   const lastMessage = messages[messages.length - 1]
   const showTyping = status === "submitted" || (status === "streaming" && lastMessage?.role !== "assistant")
+  const canSend = !busy && !uploading && (Boolean(input.trim()) || Boolean(attachment))
 
   return (
     <div className="flex h-svh overflow-hidden bg-background">
@@ -111,7 +160,7 @@ export function ChatClient({ conversationId, assistant, conversations, initialMe
                   Hi! I&apos;m your {assistant.name.replace(" Coach", "")} coach.
                 </h2>
                 <p className="max-w-md text-pretty text-muted-foreground">
-                  Ask me anything, or tap a suggestion below to get started. There are no silly questions here.
+                  Ask me anything, attach a PDF or Word doc for feedback, or tap a suggestion below to get started.
                 </p>
               </div>
             ) : (
@@ -136,13 +185,42 @@ export function ChatClient({ conversationId, assistant, conversations, initialMe
                     key={starter}
                     type="button"
                     onClick={() => submit(starter)}
-                    disabled={busy}
+                    disabled={busy || uploading}
                     className="rounded-full border border-border bg-card px-3.5 py-1.5 text-left text-sm text-foreground/90 transition-colors hover:border-primary/50 hover:bg-accent disabled:opacity-60"
                   >
                     {starter}
                   </button>
                 ))}
               </div>
+            ) : null}
+
+            {/* Attachment status */}
+            {uploading ? (
+              <div className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
+                <Spinner />
+                Reading your document…
+              </div>
+            ) : attachment ? (
+              <div className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm">
+                <FileText className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">
+                  <span className="font-medium">{attachment.filename}</span>
+                  <span className="text-muted-foreground">
+                    {" · "}
+                    {attachment.chars.toLocaleString()} chars{attachment.truncated ? " (truncated)" : ""}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAttachment(null)}
+                  aria-label="Remove attached document"
+                  className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            ) : attachError ? (
+              <p className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{attachError}</p>
             ) : null}
 
             <form
@@ -152,6 +230,26 @@ export function ChatClient({ conversationId, assistant, conversations, initialMe
               }}
               className="relative flex items-end gap-2 rounded-2xl border border-border bg-card p-2 shadow-sm focus-within:border-primary/50"
             >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ACCEPT}
+                onChange={onFileSelected}
+                className="hidden"
+                aria-hidden="true"
+                tabIndex={-1}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy || uploading}
+                aria-label="Attach a PDF or Word document"
+                className="shrink-0 rounded-xl"
+              >
+                <Paperclip />
+              </Button>
               <Textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -164,7 +262,7 @@ export function ChatClient({ conversationId, assistant, conversations, initialMe
               <Button
                 type="submit"
                 size="icon"
-                disabled={busy || !input.trim()}
+                disabled={!canSend}
                 aria-label="Send message"
                 className="shrink-0 rounded-xl"
               >

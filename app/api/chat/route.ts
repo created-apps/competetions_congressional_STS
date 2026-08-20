@@ -19,6 +19,14 @@ export const maxDuration = 30
 const DEFAULT_MODEL = "gpt-4o-mini"
 const MAX_HISTORY = 20
 
+type Attachment = { filename: string; text: string; truncated?: boolean }
+
+/** Builds a delimited context block so the model can use an attached document. */
+function documentContextBlock({ filename, text, truncated }: Attachment): string {
+  const note = truncated ? " (truncated to fit; only the beginning is shown)" : ""
+  return `The user has attached a document named "${filename}"${note}. Use its contents to inform your answer when relevant, and say so when you rely on it.\n\n<attached_document>\n${text}\n</attached_document>`
+}
+
 /** Emits a single assistant text message as a UI message stream response. */
 function staticMessageResponse(text: string) {
   const stream = createUIMessageStream({
@@ -93,14 +101,15 @@ async function tavilySearch(query: string) {
 }
 
 export async function POST(req: Request) {
-  let payload: { messages?: UIMessage[]; conversationId?: string }
+  let payload: { messages?: UIMessage[]; conversationId?: string; attachment?: Attachment }
   try {
     payload = await req.json()
   } catch {
     return staticMessageResponse("Something went wrong reading your message. Please try again.")
   }
 
-  const { messages = [], conversationId } = payload
+  const { messages = [], conversationId, attachment } = payload
+  const hasAttachment = Boolean(attachment?.text && attachment.filename)
 
   if (!process.env.OPENAI_API_KEY) {
     return staticMessageResponse(
@@ -146,14 +155,17 @@ export async function POST(req: Request) {
     assistant?.system_prompt ??
     "You are a friendly, encouraging mentor helping a high school student with their competition."
 
-  // Persist the newest user message.
+  // Persist the newest user message (with a note when a document was attached).
   const lastMessage = messages[messages.length - 1]
   const userText = textFromMessage(lastMessage)
   if (lastMessage?.role === "user" && userText) {
+    const persistedContent = hasAttachment
+      ? `${userText}\n\n📎 Attached document: ${attachment!.filename}`
+      : userText
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "user",
-      content: userText,
+      content: persistedContent,
     })
 
     // Auto-title the conversation from the first user message.
@@ -169,9 +181,14 @@ export async function POST(req: Request) {
   const recentMessages = messages.slice(-MAX_HISTORY)
   const modelMessages = await convertToModelMessages(recentMessages)
 
+  // Attach the extracted document to this turn's context.
+  const effectiveSystem = hasAttachment
+    ? `${systemPrompt}\n\n${documentContextBlock(attachment!)}`
+    : systemPrompt
+
   const result = streamText({
     model,
-    system: systemPrompt,
+    system: effectiveSystem,
     messages: modelMessages,
     stopWhen: stepCountIs(5),
     tools: {
