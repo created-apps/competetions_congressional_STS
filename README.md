@@ -48,6 +48,8 @@ Tailwind CSS.
       re-run.
    3. `scripts/003_create_auth.sql` — creates the `users` and `sessions` tables
       for email/password sign-in.
+   4. `scripts/004_create_documents.sql` — creates the `documents` table that
+      stores uploaded PDF/DOCX text so it persists across a conversation.
 
 4. **Run the dev server**
 
@@ -81,12 +83,13 @@ pnpm start
 
 - **Document uploads.** In a chat you can attach a **PDF or Word (`.docx`)**
   document (up to 10 MB). It's uploaded to `app/api/documents/extract/route.ts`,
-  where the text is extracted server-side (`unpdf` for PDFs, `mammoth` for DOCX),
-  capped at 100k characters, and attached to that turn's context so the coach can
-  read and give feedback on it. The extracted text is sent to the model for the
-  message it's attached to; a short marker (`📎 Attached document: …`) is saved in
-  the transcript. Scanned/image-only PDFs have no extractable text and are
-  rejected with a friendly message.
+  where the text is extracted server-side (`unpdf` for PDFs, `mammoth` for DOCX)
+  and capped at 100k characters. The extracted text is saved to the `documents`
+  table and **re-injected into the coach's context on every turn**, so the coach
+  can keep referring to it across follow-up questions — not just the turn it was
+  uploaded on (combined document text is capped at 120k characters). A short
+  marker (`📎 Attached document: …`) is saved in the transcript. Scanned/image-only
+  PDFs have no extractable text and are rejected with a friendly message.
 - **Email/password auth.** Users sign up or sign in at `/login`. Passwords are
   hashed with a salted [scrypt](https://en.wikipedia.org/wiki/Scrypt) digest
   (`lib/auth/password.ts`, Node's built-in `crypto` — no extra dependency) and

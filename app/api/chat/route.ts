@@ -21,10 +21,28 @@ const MAX_HISTORY = 20
 
 type Attachment = { filename: string; text: string; truncated?: boolean }
 
-/** Builds a delimited context block so the model can use an attached document. */
-function documentContextBlock({ filename, text, truncated }: Attachment): string {
-  const note = truncated ? " (truncated to fit; only the beginning is shown)" : ""
-  return `The user has attached a document named "${filename}"${note}. Use its contents to inform your answer when relevant, and say so when you rely on it.\n\n<attached_document>\n${text}\n</attached_document>`
+/** Total characters of attached-document text we inject across a conversation. */
+const MAX_TOTAL_DOC_CHARS = 120_000
+
+/**
+ * Builds a delimited context block from all documents attached to a
+ * conversation, so the coach can use them on every turn (not just the upload
+ * turn). Caps the combined size to protect the model's context budget.
+ */
+function buildDocumentsContext(docs: { filename: string; content: string }[]): string {
+  if (docs.length === 0) return ""
+
+  let budget = MAX_TOTAL_DOC_CHARS
+  const blocks: string[] = []
+  for (const doc of docs) {
+    if (budget <= 0) break
+    const slice = doc.content.slice(0, budget)
+    budget -= slice.length
+    const safeName = doc.filename.replace(/"/g, "'")
+    blocks.push(`<attached_document name="${safeName}">\n${slice}\n</attached_document>`)
+  }
+
+  return `The user has attached the following document(s) to this conversation. Read them and use their contents to inform your answers, referring to them by name when relevant.\n\n${blocks.join("\n\n")}`
 }
 
 /** Emits a single assistant text message as a UI message stream response. */
@@ -175,16 +193,39 @@ export async function POST(req: Request) {
     }
   }
 
+  // Persist a newly attached document so it stays in context for later turns.
+  if (hasAttachment) {
+    await supabase.from("documents").insert({
+      conversation_id: conversationId,
+      filename: attachment!.filename,
+      content: attachment!.text,
+    })
+  }
+
   const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY })
   const model = openai(process.env.OPENAI_MODEL || DEFAULT_MODEL)
 
   const recentMessages = messages.slice(-MAX_HISTORY)
   const modelMessages = await convertToModelMessages(recentMessages)
 
-  // Attach the extracted document to this turn's context.
-  const effectiveSystem = hasAttachment
-    ? `${systemPrompt}\n\n${documentContextBlock(attachment!)}`
-    : systemPrompt
+  // Inject every document attached to this conversation (including one just
+  // uploaded above), so follow-up questions can still reference it.
+  const { data: docRows } = await supabase
+    .from("documents")
+    .select("filename, content")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true })
+
+  // Prefer the persisted documents (available on every turn). Fall back to this
+  // turn's attachment if the documents table isn't reachable yet (e.g. the
+  // 004 migration hasn't been run), so uploads still work on the current turn.
+  let docsForContext = docRows ?? []
+  if (docsForContext.length === 0 && hasAttachment) {
+    docsForContext = [{ filename: attachment!.filename, content: attachment!.text }]
+  }
+
+  const documentsContext = buildDocumentsContext(docsForContext)
+  const effectiveSystem = documentsContext ? `${systemPrompt}\n\n${documentsContext}` : systemPrompt
 
   const result = streamText({
     model,
