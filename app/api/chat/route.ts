@@ -173,23 +173,22 @@ export async function POST(req: Request) {
     assistant?.system_prompt ??
     "You are a friendly, encouraging mentor helping a high school student with their competition."
 
-  // Persist the newest user message (with a note when a document was attached).
+  // Persist the newest user message. The client already appends a "📎 Attached
+  // document: …" note to the text when a document is attached, so store as-is.
   const lastMessage = messages[messages.length - 1]
   const userText = textFromMessage(lastMessage)
   if (lastMessage?.role === "user" && userText) {
-    const persistedContent = hasAttachment
-      ? `${userText}\n\n📎 Attached document: ${attachment!.filename}`
-      : userText
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "user",
-      content: persistedContent,
+      content: userText,
     })
 
-    // Auto-title the conversation from the first user message.
+    // Auto-title the conversation from the first line of the first user message.
     if (!conversation.title || conversation.title === "New conversation") {
-      const title = userText.length > 60 ? `${userText.slice(0, 60).trim()}…` : userText
-      await supabase.from("conversations").update({ title }).eq("id", conversationId)
+      const firstLine = userText.split("\n")[0].trim()
+      const title = firstLine.length > 60 ? `${firstLine.slice(0, 60).trim()}…` : firstLine
+      if (title) await supabase.from("conversations").update({ title }).eq("id", conversationId)
     }
   }
 

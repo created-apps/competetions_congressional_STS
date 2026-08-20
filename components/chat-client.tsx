@@ -87,7 +87,10 @@ export function ChatClient({ conversationId, assistant, conversations, initialMe
     if (busy || uploading) return
     if (!trimmed && !attachment) return
 
-    const messageText = trimmed || `Please take a look at my attached document (${attachment!.filename}).`
+    // Show the attachment in the sent bubble so it's clear the doc went along.
+    const base = trimmed || (attachment ? "Please take a look at my attached document." : "")
+    const messageText = attachment ? `${base}\n\n📎 Attached document: ${attachment.filename}` : base
+
     sendMessage(
       { text: messageText },
       attachment
